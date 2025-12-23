@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from scipy import stats
-from mlxtend.frequent_patterns import apriori, association_rules
+from mlxtend.frequent_patterns import apriori, fpgrowth, association_rules
 from sklearn.preprocessing import StandardScaler
 import plotly.express as px
 import networkx as nx
@@ -319,6 +319,164 @@ class AssociationRulesMiner:
         """
 
         fi = apriori(
+            self.basket_bool,
+            min_support=min_support,
+            use_colnames=use_colnames,
+            max_len=max_len,
+        )
+
+        fi.sort_values(by="support", ascending=False, inplace=True)
+        self.frequent_itemsets = fi
+        return self.frequent_itemsets
+
+    def generate_rules(
+        self,
+        metric: str = "lift",
+        min_threshold: float = 1.0,
+    ) -> pd.DataFrame:
+        """
+        Generate association rules from frequent itemsets.
+
+        Args:
+            metric (str): Metric to evaluate the rules
+            min_threshold (float): Minimum threshold for the metric
+
+        Returns:
+            pd.DataFrame: DataFrame of association rules
+        """
+
+        if self.frequent_itemsets is None:
+            raise ValueError(
+                "Frequent itemsets not mined. Please run mine_frequent_itemsets() first."
+            )
+
+        rules = association_rules(
+            self.frequent_itemsets,
+            metric=metric,
+            min_threshold=min_threshold,
+        )
+
+        rules = rules.sort_values(["lift", "confidence"], ascending=False)
+        self.rules = rules
+        return self.rules
+
+    @staticmethod
+    def _frozenset_to_str(fs: frozenset) -> str:
+        return ", ".join(sorted(list(fs)))
+
+    def add_readable_rule_str(self) -> pd.DataFrame:
+        """
+        Add human-readable columns for antecedents, consequents, and rule_str
+        to the rules dataframe.
+
+        Returns:
+            pd.DataFrame: Rules dataframe with extra readable columns
+        """
+        if self.rules is None:
+            raise ValueError("rules is not available. Call generate_rules() first.")
+
+        rules = self.rules.copy()
+        rules["antecedents_str"] = rules["antecedents"].apply(self._frozenset_to_str)
+        rules["consequents_str"] = rules["consequents"].apply(self._frozenset_to_str)
+        rules["rule_str"] = rules["antecedents_str"] + " → " + rules["consequents_str"]
+
+        self.rules = rules
+        return self.rules
+
+    def filter_rules(
+        self,
+        min_support: float = None,
+        min_confidence: float = None,
+        min_lift: float = None,
+        max_len_antecedents: int = None,
+        max_len_consequents: int = None,
+    ) -> pd.DataFrame:
+        """
+        Filter rules based on support, confidence, lift and length of antecedents/consequents.
+        """
+        if self.rules is None:
+            raise ValueError("rules is not available. Call generate_rules() first.")
+
+        filtered = self.rules.copy()
+
+        if min_support is not None:
+            filtered = filtered[filtered["support"] >= min_support]
+        if min_confidence is not None:
+            filtered = filtered[filtered["confidence"] >= min_confidence]
+        if min_lift is not None:
+            filtered = filtered[filtered["lift"] >= min_lift]
+        if max_len_antecedents is not None:
+            filtered = filtered[
+                filtered["antecedents"].apply(len) <= max_len_antecedents
+            ]
+        if max_len_consequents is not None:
+            filtered = filtered[
+                filtered["consequents"].apply(len) <= max_len_consequents
+            ]
+
+        filtered = filtered.reset_index(drop=True)
+        return filtered
+
+    def save_rules(self, output_path: str, rules_df: pd.DataFrame = None):
+        """
+        Save rules dataframe to CSV.
+
+        Args:
+            output_path (str): CSV path
+            rules_df (pd.DataFrame): Rules dataframe to save (if None, use self.rules)
+        """
+        if rules_df is None:
+            if self.rules is None:
+                raise ValueError("No rules to save.")
+            rules_df = self.rules
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        rules_df.to_csv(output_path, index=False)
+        print(f"Đã lưu luật vào: {output_path}")
+
+
+# =========================================================
+# 3B. FP-GROWTH ASSOCIATION RULES MINER
+# =========================================================
+
+class FPGrowthMiner:
+    """
+    A class for mining association rules using the FP-Growth algorithm.
+
+    FP-Growth is typically faster than Apriori, especially for large datasets
+    and low support thresholds, because it uses a tree-based approach.
+    """
+
+    def __init__(self, basket_bool: pd.DataFrame):
+        """
+        Initialize the FPGrowthMiner with basket data.
+
+        Args:
+            basket_bool (pd.DataFrame): Boolean encoded basket dataframe
+        """
+        self.basket_bool = basket_bool
+        self.frequent_itemsets = None
+        self.rules = None
+
+    def mine_frequent_itemsets(
+        self,
+        min_support: float = 0.01,
+        max_len: int = None,
+        use_colnames: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Mine frequent itemsets using the FP-Growth algorithm.
+
+        Args:
+            min_support (float): Minimum support threshold
+            max_len (int): Maximum length of itemsets
+            use_colnames (bool): Use column names in output
+
+        Returns:
+            pd.DataFrame: DataFrame of frequent itemsets
+        """
+
+        fi = fpgrowth(
             self.basket_bool,
             min_support=min_support,
             use_colnames=use_colnames,
@@ -993,3 +1151,147 @@ class DataVisualizer:
         plt.axis("off")
         plt.tight_layout()
         plt.show()
+
+
+# =========================================================
+# WEIGHTED ASSOCIATION MINER
+# =========================================================
+
+class WeightedAssociationMiner:
+    """
+    A class for mining weighted association rules based on transaction values.
+    
+    This class extends traditional association rule mining by incorporating
+    transaction weights (e.g., invoice values) to focus on high-value patterns.
+    """
+    
+    def __init__(self, basket_bool: pd.DataFrame, transaction_weights: pd.Series):
+        """
+        Initialize with basket matrix and transaction weights.
+        
+        Args:
+            basket_bool: Boolean basket matrix (transactions x products)
+            transaction_weights: Series of weights for each transaction (e.g., invoice values)
+        """
+        self.basket_bool = basket_bool
+        self.transaction_weights = transaction_weights
+        self.frequent_itemsets = None
+        self.rules = None
+        self.weighted_rules = None
+    
+    def mine_frequent_itemsets_weighted(
+        self,
+        min_weighted_support: float = 0.01,
+        max_len: int = None,
+        use_colnames: bool = True,
+    ) -> pd.DataFrame:
+        """
+        Mine frequent itemsets using weighted support.
+        
+        Weighted support = sum of weights of transactions containing the itemset / total weight
+        """
+        # First, get frequent itemsets using regular FP-Growth
+        from mlxtend.frequent_patterns import fpgrowth
+        self.frequent_itemsets = fpgrowth(
+            self.basket_bool,
+            min_support=min_weighted_support,  # Use as threshold for initial filtering
+            max_len=max_len,
+            use_colnames=use_colnames,
+        )
+        
+        # Calculate weighted support for each itemset
+        weighted_supports = []
+        for _, row in self.frequent_itemsets.iterrows():
+            itemset = row['itemsets']
+            # Find transactions containing this itemset
+            mask = self.basket_bool[list(itemset)].all(axis=1)
+            weighted_support = self.transaction_weights[mask].sum() / self.transaction_weights.sum()
+            weighted_supports.append(weighted_support)
+        
+        self.frequent_itemsets['weighted_support'] = weighted_supports
+        
+        # Filter by weighted support
+        self.frequent_itemsets = self.frequent_itemsets[
+            self.frequent_itemsets['weighted_support'] >= min_weighted_support
+        ].sort_values('weighted_support', ascending=False)
+        
+        return self.frequent_itemsets
+    
+    def generate_weighted_rules(
+        self,
+        frequent_itemsets: pd.DataFrame = None,
+        min_weighted_confidence: float = 0.3,
+        min_weighted_lift: float = 1.2,
+    ) -> pd.DataFrame:
+        """
+        Generate weighted association rules from frequent itemsets.
+        """
+        if frequent_itemsets is None:
+            frequent_itemsets = self.frequent_itemsets
+        
+        # Generate regular rules first
+        from mlxtend.frequent_patterns import association_rules
+        self.rules = association_rules(
+            frequent_itemsets[['support', 'itemsets']],
+            metric="confidence",
+            min_threshold=min_weighted_confidence,
+        )
+        
+        # Calculate weighted metrics for each rule
+        weighted_confidences = []
+        weighted_lifts = []
+        
+        for _, rule in self.rules.iterrows():
+            antecedents = rule['antecedents']
+            consequents = rule['consequents']
+            
+            # Weighted confidence = weighted_support(X∪Y) / weighted_support(X)
+            ant_mask = self.basket_bool[list(antecedents)].all(axis=1)
+            cons_mask = self.basket_bool[list(consequents)].all(axis=1)
+            both_mask = self.basket_bool[list(antecedents.union(consequents))].all(axis=1)
+            
+            weighted_support_ant = self.transaction_weights[ant_mask].sum() / self.transaction_weights.sum()
+            weighted_support_both = self.transaction_weights[both_mask].sum() / self.transaction_weights.sum()
+            
+            if weighted_support_ant > 0:
+                weighted_conf = weighted_support_both / weighted_support_ant
+            else:
+                weighted_conf = 0
+            
+            # Weighted lift = weighted_conf / weighted_support(Y)
+            weighted_support_cons = self.transaction_weights[cons_mask].sum() / self.transaction_weights.sum()
+            if weighted_support_cons > 0:
+                weighted_lift = weighted_conf / weighted_support_cons
+            else:
+                weighted_lift = 1
+            
+            weighted_confidences.append(weighted_conf)
+            weighted_lifts.append(weighted_lift)
+        
+        self.rules['weighted_confidence'] = weighted_confidences
+        self.rules['weighted_lift'] = weighted_lifts
+        
+        # Filter by weighted thresholds
+        self.weighted_rules = self.rules[
+            (self.rules['weighted_confidence'] >= min_weighted_confidence) &
+            (self.rules['weighted_lift'] >= min_weighted_lift)
+        ].sort_values('weighted_lift', ascending=False)
+        
+        return self.weighted_rules
+    
+    def add_readable_rule_str(self, rules_df=None):
+        """
+        Add readable string representation for rules.
+        """
+        if rules_df is None:
+            rules_df = self.weighted_rules
+        
+        rule_strs = []
+        for _, rule in rules_df.iterrows():
+            ant_str = ', '.join(rule['antecedents'])
+            cons_str = ', '.join(rule['consequents'])
+            rule_str = f"{ant_str} → {cons_str}"
+            rule_strs.append(rule_str)
+        
+        rules_df['rule_str'] = rule_strs
+        return rules_df

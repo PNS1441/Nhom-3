@@ -73,5 +73,54 @@ pm.execute_notebook(
     kernel_name="python3",
 )
 
+# Chạy Notebook FP-Growth Modelling
+pm.execute_notebook(
+    "notebooks/fp_growth_modelling.ipynb",
+    "notebooks/runs/fp_growth_modelling_run.ipynb",
+    parameters=dict(
+        BASKET_BOOL_PATH="data/processed/basket_bool.parquet",
+        RULES_OUTPUT_PATH="data/processed/rules_fpgrowth_filtered.csv",
+
+        # Tham số FP-Growth
+        MIN_SUPPORT=0.01,
+        MAX_LEN=3,
+
+        # Generate rules
+        METRIC="lift",
+        MIN_THRESHOLD=1.0,
+
+        # Lọc luật
+        FILTER_MIN_SUPPORT=0.01,
+        FILTER_MIN_CONF=0.3,
+        FILTER_MIN_LIFT=1.2,
+        FILTER_MAX_ANTECEDENTS=2,
+        FILTER_MAX_CONSEQUENTS=1,
+
+        # Số luật để vẽ
+        TOP_N_RULES=20,
+
+        # Tắt plot khi chạy batch
+        PLOT_TOP_LIFT=False,
+        PLOT_TOP_CONF=False,
+        PLOT_SCATTER=False,
+        PLOT_NETWORK=False,
+        PLOT_PLOTLY_SCATTER=False,
+    ),
+    kernel_name="python3",
+)
+
+# Chạy Notebook So sánh Apriori vs FP-Growth
+pm.execute_notebook(
+    "notebooks/compare_apriori_fpgrowth.ipynb",
+    "notebooks/runs/compare_apriori_fpgrowth_run.ipynb",
+    parameters=dict(
+        BASKET_BOOL_PATH="data/processed/basket_bool.parquet",
+        RULES_APRIORI_PATH="data/processed/rules_apriori_filtered.csv",
+        RULES_FP_PATH="data/processed/rules_fpgrowth_filtered.csv",
+        SUPPORT_VALUES=[0.05, 0.03, 0.01, 0.008, 0.005],
+    ),
+    kernel_name="python3",
+)
+
 
 print("Đã chạy xong pipeline")
